@@ -12,7 +12,7 @@ let package = Package(
         .executableTarget(
             name: "nanoedit",
             dependencies: [.product(name: "Highlighter", package: "highlighterswift")],
-            path: "Sources/NanoEdit"
+            path: "Sources/nanoedit"
         ),
     ]
 )
