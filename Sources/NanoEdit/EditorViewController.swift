@@ -28,15 +28,23 @@ class EditorViewController: NSViewController, NSWindowDelegate {
     }
 
     override func loadView() {
-        let scrollView = NSScrollView(frame: NSRect(x: 0, y: 0, width: 600, height: 400))
+        // Background blur effect
+        let visualEffectView = NSVisualEffectView(frame: NSRect(x: 0, y: 0, width: 600, height: 400))
+        visualEffectView.material = .hudWindow
+        visualEffectView.blendingMode = .behindWindow
+        visualEffectView.state = .active
+        visualEffectView.autoresizingMask = [.width, .height]
+
+        let scrollView = NSScrollView(frame: visualEffectView.bounds)
         scrollView.hasVerticalScroller = true
         scrollView.hasHorizontalScroller = false
         scrollView.autoresizingMask = [.width, .height]
+        scrollView.drawsBackground = false
 
         // Set up Highlightr with CodeAttributedString
         let textStorage: NSTextStorage
         if let highlightr = Highlightr() {
-            highlightr.setTheme(to: "monokai")
+            highlightr.setTheme(to: "atom-one-dark")
             let codeStorage = CodeAttributedString(highlightr: highlightr)
             codeStorage.language = "markdown"
             textStorage = codeStorage
@@ -64,18 +72,14 @@ class EditorViewController: NSViewController, NSWindowDelegate {
         textView.isHorizontallyResizable = false
         textView.font = NSFont.monospacedSystemFont(ofSize: 13, weight: .regular)
 
-        // Apply dark theme colors
-        if let highlightr = (textStorage as? CodeAttributedString)?.highlightr {
-            textView.backgroundColor = highlightr.theme.themeBackgroundColor
-        } else {
-            textView.backgroundColor = NSColor(red: 0.15, green: 0.15, blue: 0.15, alpha: 1.0)
-        }
+        textView.drawsBackground = false
         textView.textColor = .white
         textView.insertionPointColor = .white
 
         scrollView.documentView = textView
+        visualEffectView.addSubview(scrollView)
         self.textView = textView
-        self.view = scrollView
+        self.view = visualEffectView
     }
 
     override func viewDidLoad() {
