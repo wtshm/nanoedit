@@ -201,6 +201,7 @@ class EditorViewController: NSViewController, NSWindowDelegate, NSTextViewDelega
         textView.isSelectable = true
         textView.allowsUndo = true
         textView.autoresizingMask = [.width]
+        textView.maxSize = NSSize(width: CGFloat.greatestFiniteMagnitude, height: CGFloat.greatestFiniteMagnitude)
         textView.isVerticallyResizable = true
         textView.isHorizontallyResizable = false
         textView.font = Self.editorFont
