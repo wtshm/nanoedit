@@ -14,6 +14,7 @@ class EditorWindow: NSWindow {
         self.contentViewController = viewController
         self.level = .floating
         self.isReleasedWhenClosed = false
+        self.minSize = NSSize(width: 300, height: 200)
         self.setFrameAutosaveName("NanoEditWindow")
 
         // Transparent title bar (keep traffic light buttons)
