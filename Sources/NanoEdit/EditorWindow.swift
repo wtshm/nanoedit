@@ -6,7 +6,7 @@ class EditorWindow: NSWindow {
 
         super.init(
             contentRect: defaultFrame,
-            styleMask: [.titled, .closable, .miniaturizable, .resizable],
+            styleMask: [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView],
             backing: .buffered,
             defer: false
         )
@@ -16,11 +16,14 @@ class EditorWindow: NSWindow {
         self.isReleasedWhenClosed = false
         self.setFrameAutosaveName("NanoEditWindow")
 
-        // Set title to filename
-        if let viewController = viewController as? EditorViewController {
-            let url = URL(fileURLWithPath: viewController.filePath)
-            self.title = url.lastPathComponent
-        }
+        // Transparent title bar (keep traffic light buttons)
+        self.titlebarAppearsTransparent = true
+        self.titleVisibility = .hidden
+        self.isMovableByWindowBackground = true
+
+        // Translucent background
+        self.isOpaque = false
+        self.backgroundColor = .clear
 
         // Center only if no saved frame exists
         if !self.setFrameUsingName("NanoEditWindow") {
