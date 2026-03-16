@@ -6,12 +6,12 @@ let package = Package(
     name: "nanoedit",
     platforms: [.macOS(.v13)],
     dependencies: [
-        .package(url: "https://github.com/raspu/Highlightr.git", from: "2.2.1"),
+        .package(url: "https://github.com/smittytone/HighlighterSwift.git", from: "3.0.0"),
     ],
     targets: [
         .executableTarget(
             name: "nanoedit",
-            dependencies: ["Highlightr"],
+            dependencies: [.product(name: "Highlighter", package: "highlighterswift")],
             path: "Sources/NanoEdit"
         ),
     ]

@@ -1,8 +1,7 @@
 import AppKit
-import Highlightr
+import Highlighter
 
-// Custom NSTextView that forwards Escape to the window's close handler.
-// NSTextView consumes Escape for autocomplete by default, so we intercept it here.
+// NSTextView subclass that forwards Escape to close the window instead of autocomplete.
 class EscapeHandlingTextView: NSTextView {
     override func performKeyEquivalent(with event: NSEvent) -> Bool {
         if event.keyCode == 53 { // Escape
@@ -13,10 +12,71 @@ class EscapeHandlingTextView: NSTextView {
     }
 }
 
-class EditorViewController: NSViewController, NSWindowDelegate {
+// Applies syntax highlighting asynchronously to avoid re-entering textStorage editing.
+class HighlightingTextStorageDelegate: NSObject, NSTextStorageDelegate {
+    private let highlighter: Highlighter
+    private let language: String
+    private let font: NSFont
+    private let didApplyHighlighting: (() -> Void)?
+    private var pendingHighlight = false
+
+    init(highlighter: Highlighter, language: String, font: NSFont, didApplyHighlighting: (() -> Void)? = nil) {
+        self.highlighter = highlighter
+        self.language = language
+        self.font = font
+        self.didApplyHighlighting = didApplyHighlighting
+    }
+
+    func textStorage(
+        _ textStorage: NSTextStorage,
+        didProcessEditing editedMask: NSTextStorageEditActions,
+        range editedRange: NSRange,
+        changeInLength delta: Int
+    ) {
+        guard editedMask.contains(.editedCharacters), !pendingHighlight else { return }
+
+        pendingHighlight = true
+        DispatchQueue.main.async { [weak self, weak textStorage] in
+            guard let textStorage else { return }
+            self?.applyHighlighting(to: textStorage)
+        }
+    }
+
+    private func applyHighlighting(to textStorage: NSTextStorage) {
+        defer { pendingHighlight = false }
+
+        // Skip while IME composition is active
+        for layoutManager in textStorage.layoutManagers {
+            if layoutManager.firstTextView?.hasMarkedText() == true { return }
+        }
+
+        let fullText = textStorage.string
+        guard !fullText.isEmpty,
+              let highlighted = highlighter.highlight(fullText, as: language),
+              highlighted.length == textStorage.length else { return }
+
+        let font = self.font
+        let fullRange = NSRange(location: 0, length: textStorage.length)
+
+        textStorage.beginEditing()
+        highlighted.enumerateAttributes(in: fullRange) { attrs, range, _ in
+            var merged = attrs
+            merged[.font] = font
+            textStorage.setAttributes(merged, range: range)
+        }
+        textStorage.endEditing()
+        didApplyHighlighting?()
+    }
+}
+
+class EditorViewController: NSViewController, NSWindowDelegate, NSTextViewDelegate {
+    static let editorFont = NSFont.monospacedSystemFont(ofSize: 13, weight: .regular)
+    static let editorTextColor = NSColor.white
+
     let filePath: String
     private var textView: NSTextView!
     private var originalContent: String = ""
+    private var highlightingDelegate: HighlightingTextStorageDelegate?
 
     init(filePath: String) {
         self.filePath = filePath
@@ -41,15 +101,20 @@ class EditorViewController: NSViewController, NSWindowDelegate {
         scrollView.autoresizingMask = [.width, .height]
         scrollView.drawsBackground = false
 
-        // Set up Highlightr with CodeAttributedString
-        let textStorage: NSTextStorage
-        if let highlightr = Highlightr() {
-            highlightr.setTheme(to: "atom-one-dark")
-            let codeStorage = CodeAttributedString(highlightr: highlightr)
-            codeStorage.language = "markdown"
-            textStorage = codeStorage
-        } else {
-            textStorage = NSTextStorage()
+        // Set up HighlighterSwift
+        let textStorage = NSTextStorage()
+        if let highlighter = Highlighter() {
+            highlighter.setTheme("atom-one-dark")
+            let delegate = HighlightingTextStorageDelegate(
+                highlighter: highlighter,
+                language: "markdown",
+                font: Self.editorFont,
+                didApplyHighlighting: { [weak self] in
+                    self?.updateInputAttributes()
+                }
+            )
+            textStorage.delegate = delegate
+            self.highlightingDelegate = delegate
         }
 
         let layoutManager = NSLayoutManager()
@@ -70,16 +135,18 @@ class EditorViewController: NSViewController, NSWindowDelegate {
         textView.autoresizingMask = [.width]
         textView.isVerticallyResizable = true
         textView.isHorizontallyResizable = false
-        textView.font = NSFont.monospacedSystemFont(ofSize: 13, weight: .regular)
+        textView.font = Self.editorFont
+        textView.delegate = self
 
         textView.drawsBackground = false
-        textView.textColor = .white
-        textView.insertionPointColor = .white
+        textView.textColor = Self.editorTextColor
+        textView.insertionPointColor = Self.editorTextColor
 
         scrollView.documentView = textView
         visualEffectView.addSubview(scrollView)
         self.textView = textView
         self.view = visualEffectView
+        updateInputAttributes()
     }
 
     override func viewDidLoad() {
@@ -103,6 +170,7 @@ class EditorViewController: NSViewController, NSWindowDelegate {
         } else {
             originalContent = ""
         }
+        updateInputAttributes()
     }
 
     override func viewDidAppear() {
@@ -161,5 +229,31 @@ class EditorViewController: NSViewController, NSWindowDelegate {
         default: // Cancel
             return false
         }
+    }
+
+    func textViewDidChangeSelection(_ notification: Notification) {
+        updateInputAttributes()
+    }
+
+    private func updateInputAttributes() {
+        guard let textView = self.textView else { return }
+
+        let font = Self.editorFont
+        var foregroundColor: Any = Self.editorTextColor
+
+        if let textStorage = textView.textStorage, textStorage.length > 0 {
+            let location = textView.selectedRange().location
+            if location > 0 {
+                let attrs = textStorage.attributes(at: location - 1, effectiveRange: nil)
+                if let color = attrs[.foregroundColor] { foregroundColor = color }
+            }
+        }
+
+        textView.typingAttributes = [.font: font, .foregroundColor: foregroundColor]
+
+        var markedAttrs = textView.markedTextAttributes ?? [:]
+        markedAttrs[.font] = font
+        markedAttrs[.foregroundColor] = foregroundColor
+        textView.markedTextAttributes = markedAttrs
     }
 }
