@@ -12,18 +12,55 @@ class EscapeHandlingTextView: NSTextView {
     }
 }
 
+private final class FixedLineMetricsDelegate: NSObject, NSLayoutManagerDelegate {
+    let lineHeight: CGFloat
+    private let baselineY: CGFloat
+
+    init(primaryFont: NSFont, fallbackFont: NSFont?) {
+        let fonts = [primaryFont, fallbackFont].compactMap { $0 }
+        let ascender = fonts.map(\.ascender).max() ?? primaryFont.ascender
+        let descender = fonts.map { abs($0.descender) }.max() ?? abs(primaryFont.descender)
+
+        let padding: CGFloat = 4
+        self.lineHeight = ceil(ascender + descender) + padding
+        self.baselineY = ceil(ascender) + padding / 2
+    }
+
+    func layoutManager(
+        _ layoutManager: NSLayoutManager,
+        shouldSetLineFragmentRect lineFragmentRect: UnsafeMutablePointer<NSRect>,
+        lineFragmentUsedRect: UnsafeMutablePointer<NSRect>,
+        baselineOffset: UnsafeMutablePointer<CGFloat>,
+        in textContainer: NSTextContainer,
+        forGlyphRange glyphRange: NSRange
+    ) -> Bool {
+        lineFragmentRect.pointee.size.height = lineHeight
+        lineFragmentUsedRect.pointee.size.height = lineHeight
+        baselineOffset.pointee = baselineY
+        return true
+    }
+}
+
 // Applies syntax highlighting asynchronously to avoid re-entering textStorage editing.
 class HighlightingTextStorageDelegate: NSObject, NSTextStorageDelegate {
     private let highlighter: Highlighter
     private let language: String
     private let font: NSFont
+    private let paragraphStyle: NSParagraphStyle
     private let didApplyHighlighting: (() -> Void)?
     private var pendingHighlight = false
 
-    init(highlighter: Highlighter, language: String, font: NSFont, didApplyHighlighting: (() -> Void)? = nil) {
+    init(
+        highlighter: Highlighter,
+        language: String,
+        font: NSFont,
+        paragraphStyle: NSParagraphStyle,
+        didApplyHighlighting: (() -> Void)? = nil
+    ) {
         self.highlighter = highlighter
         self.language = language
         self.font = font
+        self.paragraphStyle = paragraphStyle
         self.didApplyHighlighting = didApplyHighlighting
     }
 
@@ -62,6 +99,7 @@ class HighlightingTextStorageDelegate: NSObject, NSTextStorageDelegate {
         highlighted.enumerateAttributes(in: fullRange) { attrs, range, _ in
             var merged = attrs
             merged[.font] = font
+            merged[.paragraphStyle] = paragraphStyle
             textStorage.setAttributes(merged, range: range)
         }
         textStorage.endEditing()
@@ -70,12 +108,22 @@ class HighlightingTextStorageDelegate: NSObject, NSTextStorageDelegate {
 }
 
 class EditorViewController: NSViewController, NSWindowDelegate, NSTextViewDelegate {
-    static let editorFont = NSFont.monospacedSystemFont(ofSize: 13, weight: .regular)
+    static let editorFont = NSFont(name: "Menlo", size: 13) ?? NSFont.monospacedSystemFont(ofSize: 13, weight: .regular)
+    static let fallbackEditorFont = NSFont(name: "Hiragino Sans", size: editorFont.pointSize)
+
+    static func makeEditorParagraphStyle(lineHeight: CGFloat) -> NSParagraphStyle {
+        let paragraphStyle = NSMutableParagraphStyle()
+        paragraphStyle.minimumLineHeight = lineHeight
+        paragraphStyle.maximumLineHeight = lineHeight
+        return paragraphStyle
+    }
 
     let filePath: String
     private var textView: NSTextView!
     private var originalContent: String = ""
     private var highlightingDelegate: HighlightingTextStorageDelegate?
+    private var lineMetricsDelegate: FixedLineMetricsDelegate?
+    private var editorParagraphStyle: NSParagraphStyle!
     private var themeTextColor: NSColor = .white
 
     init(filePath: String) {
@@ -103,6 +151,20 @@ class EditorViewController: NSViewController, NSWindowDelegate, NSTextViewDelega
 
         // Set up HighlighterSwift
         let textStorage = NSTextStorage()
+        let layoutManager = NSLayoutManager()
+        layoutManager.usesFontLeading = false
+        textStorage.addLayoutManager(layoutManager)
+
+        let lineMetricsDelegate = FixedLineMetricsDelegate(
+            primaryFont: Self.editorFont,
+            fallbackFont: Self.fallbackEditorFont
+        )
+        layoutManager.delegate = lineMetricsDelegate
+        self.lineMetricsDelegate = lineMetricsDelegate
+
+        let paragraphStyle = Self.makeEditorParagraphStyle(lineHeight: lineMetricsDelegate.lineHeight)
+        self.editorParagraphStyle = paragraphStyle
+
         if let highlighter = Highlighter() {
             highlighter.setTheme("atom-one-dark")
 
@@ -117,6 +179,7 @@ class EditorViewController: NSViewController, NSWindowDelegate, NSTextViewDelega
                 highlighter: highlighter,
                 language: "markdown",
                 font: Self.editorFont,
+                paragraphStyle: paragraphStyle,
                 didApplyHighlighting: { [weak self] in
                     self?.updateInputAttributes()
                 }
@@ -124,9 +187,6 @@ class EditorViewController: NSViewController, NSWindowDelegate, NSTextViewDelega
             textStorage.delegate = delegate
             self.highlightingDelegate = delegate
         }
-
-        let layoutManager = NSLayoutManager()
-        textStorage.addLayoutManager(layoutManager)
 
         let containerSize = NSSize(
             width: scrollView.contentSize.width,
@@ -144,6 +204,7 @@ class EditorViewController: NSViewController, NSWindowDelegate, NSTextViewDelega
         textView.isVerticallyResizable = true
         textView.isHorizontallyResizable = false
         textView.font = Self.editorFont
+        textView.defaultParagraphStyle = paragraphStyle
         textView.delegate = self
 
         textView.drawsBackground = false
@@ -154,7 +215,6 @@ class EditorViewController: NSViewController, NSWindowDelegate, NSTextViewDelega
         visualEffectView.addSubview(scrollView)
         self.textView = textView
         self.view = visualEffectView
-        updateInputAttributes()
     }
 
     override func viewDidLoad() {
@@ -178,6 +238,7 @@ class EditorViewController: NSViewController, NSWindowDelegate, NSTextViewDelega
         } else {
             originalContent = ""
         }
+        applyEditorParagraphStyle()
         updateInputAttributes()
     }
 
@@ -247,6 +308,7 @@ class EditorViewController: NSViewController, NSWindowDelegate, NSTextViewDelega
         guard let textView = self.textView else { return }
 
         let font = Self.editorFont
+        let paragraphStyle: NSParagraphStyle = editorParagraphStyle
         var foregroundColor: NSColor = themeTextColor
 
         if let textStorage = textView.textStorage, textStorage.length > 0 {
@@ -257,11 +319,26 @@ class EditorViewController: NSViewController, NSWindowDelegate, NSTextViewDelega
             }
         }
 
-        textView.typingAttributes = [.font: font, .foregroundColor: foregroundColor]
+        textView.typingAttributes = [
+            .font: font,
+            .foregroundColor: foregroundColor,
+            .paragraphStyle: paragraphStyle,
+        ]
 
         var markedAttrs = textView.markedTextAttributes ?? [:]
         markedAttrs[.font] = font
         markedAttrs[.foregroundColor] = foregroundColor
+        markedAttrs[.paragraphStyle] = paragraphStyle
         textView.markedTextAttributes = markedAttrs
+    }
+
+    private func applyEditorParagraphStyle() {
+        guard let textView = self.textView else { return }
+
+        textView.defaultParagraphStyle = editorParagraphStyle
+
+        guard let textStorage = textView.textStorage, textStorage.length > 0 else { return }
+        let fullRange = NSRange(location: 0, length: textStorage.length)
+        textStorage.addAttribute(.paragraphStyle, value: editorParagraphStyle!, range: fullRange)
     }
 }
