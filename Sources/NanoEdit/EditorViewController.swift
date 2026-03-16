@@ -71,12 +71,12 @@ class HighlightingTextStorageDelegate: NSObject, NSTextStorageDelegate {
 
 class EditorViewController: NSViewController, NSWindowDelegate, NSTextViewDelegate {
     static let editorFont = NSFont.monospacedSystemFont(ofSize: 13, weight: .regular)
-    static let editorTextColor = NSColor.white
 
     let filePath: String
     private var textView: NSTextView!
     private var originalContent: String = ""
     private var highlightingDelegate: HighlightingTextStorageDelegate?
+    private var themeTextColor: NSColor = .white
 
     init(filePath: String) {
         self.filePath = filePath
@@ -105,6 +105,14 @@ class EditorViewController: NSViewController, NSWindowDelegate, NSTextViewDelega
         let textStorage = NSTextStorage()
         if let highlighter = Highlighter() {
             highlighter.setTheme("atom-one-dark")
+
+            // Extract the theme's default text color from a sample highlight
+            if let sample = highlighter.highlight("x", as: "plaintext"),
+               sample.length > 0,
+               let color = sample.attribute(.foregroundColor, at: 0, effectiveRange: nil) as? NSColor {
+                self.themeTextColor = color
+            }
+
             let delegate = HighlightingTextStorageDelegate(
                 highlighter: highlighter,
                 language: "markdown",
@@ -139,8 +147,8 @@ class EditorViewController: NSViewController, NSWindowDelegate, NSTextViewDelega
         textView.delegate = self
 
         textView.drawsBackground = false
-        textView.textColor = Self.editorTextColor
-        textView.insertionPointColor = Self.editorTextColor
+        textView.textColor = themeTextColor
+        textView.insertionPointColor = themeTextColor
 
         scrollView.documentView = textView
         visualEffectView.addSubview(scrollView)
@@ -239,13 +247,13 @@ class EditorViewController: NSViewController, NSWindowDelegate, NSTextViewDelega
         guard let textView = self.textView else { return }
 
         let font = Self.editorFont
-        var foregroundColor: Any = Self.editorTextColor
+        var foregroundColor: NSColor = themeTextColor
 
         if let textStorage = textView.textStorage, textStorage.length > 0 {
             let location = textView.selectedRange().location
-            if location > 0 {
-                let attrs = textStorage.attributes(at: location - 1, effectiveRange: nil)
-                if let color = attrs[.foregroundColor] { foregroundColor = color }
+            if location > 0,
+               let color = textStorage.attribute(.foregroundColor, at: location - 1, effectiveRange: nil) as? NSColor {
+                foregroundColor = color
             }
         }
 
