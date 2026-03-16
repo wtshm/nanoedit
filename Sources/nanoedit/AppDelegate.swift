@@ -29,43 +29,48 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func setupMainMenu() {
         let mainMenu = NSMenu()
+        mainMenu.addItem(makeAppMenuItem())
+        mainMenu.addItem(makeFileMenuItem())
+        mainMenu.addItem(makeEditMenuItem())
+        NSApp.mainMenu = mainMenu
+    }
 
-        // App menu
-        let appMenuItem = NSMenuItem()
-        let appMenu = NSMenu()
-        appMenu.addItem(withTitle: "About nanoedit", action: #selector(NSApplication.orderFrontStandardAboutPanel(_:)), keyEquivalent: "")
-        appMenu.addItem(NSMenuItem.separator())
-        appMenu.addItem(withTitle: "Hide nanoedit", action: #selector(NSApplication.hide(_:)), keyEquivalent: "h")
+    private func makeAppMenuItem() -> NSMenuItem {
+        let menuItem = NSMenuItem()
+        let menu = NSMenu()
+        menu.addItem(withTitle: "About nanoedit", action: #selector(NSApplication.orderFrontStandardAboutPanel(_:)), keyEquivalent: "")
+        menu.addItem(NSMenuItem.separator())
+        menu.addItem(withTitle: "Hide nanoedit", action: #selector(NSApplication.hide(_:)), keyEquivalent: "h")
         let hideOthersItem = NSMenuItem(title: "Hide Others", action: #selector(NSApplication.hideOtherApplications(_:)), keyEquivalent: "h")
         hideOthersItem.keyEquivalentModifierMask = [.command, .option]
-        appMenu.addItem(hideOthersItem)
-        appMenu.addItem(withTitle: "Show All", action: #selector(NSApplication.unhideAllApplications(_:)), keyEquivalent: "")
-        appMenu.addItem(NSMenuItem.separator())
-        appMenu.addItem(withTitle: "Quit nanoedit", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
-        appMenuItem.submenu = appMenu
-        mainMenu.addItem(appMenuItem)
+        menu.addItem(hideOthersItem)
+        menu.addItem(withTitle: "Show All", action: #selector(NSApplication.unhideAllApplications(_:)), keyEquivalent: "")
+        menu.addItem(NSMenuItem.separator())
+        menu.addItem(withTitle: "Quit nanoedit", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
+        menuItem.submenu = menu
+        return menuItem
+    }
 
-        // File menu
-        let fileMenuItem = NSMenuItem()
-        let fileMenu = NSMenu(title: "File")
-        fileMenu.addItem(withTitle: "Save", action: #selector(EditorViewController.saveAndExit), keyEquivalent: "s")
-        fileMenu.addItem(withTitle: "Close", action: #selector(NSWindow.performClose(_:)), keyEquivalent: "w")
-        fileMenuItem.submenu = fileMenu
-        mainMenu.addItem(fileMenuItem)
+    private func makeFileMenuItem() -> NSMenuItem {
+        let menuItem = NSMenuItem()
+        let menu = NSMenu(title: "File")
+        menu.addItem(withTitle: "Save", action: #selector(EditorViewController.saveAndExit), keyEquivalent: "s")
+        menu.addItem(withTitle: "Close", action: #selector(NSWindow.performClose(_:)), keyEquivalent: "w")
+        menuItem.submenu = menu
+        return menuItem
+    }
 
-        // Edit menu (required for standard text editing shortcuts)
-        let editMenuItem = NSMenuItem()
-        let editMenu = NSMenu(title: "Edit")
-        editMenu.addItem(withTitle: "Undo", action: Selector(("undo:")), keyEquivalent: "z")
-        editMenu.addItem(withTitle: "Redo", action: Selector(("redo:")), keyEquivalent: "Z")
-        editMenu.addItem(NSMenuItem.separator())
-        editMenu.addItem(withTitle: "Cut", action: #selector(NSText.cut(_:)), keyEquivalent: "x")
-        editMenu.addItem(withTitle: "Copy", action: #selector(NSText.copy(_:)), keyEquivalent: "c")
-        editMenu.addItem(withTitle: "Paste", action: #selector(NSText.paste(_:)), keyEquivalent: "v")
-        editMenu.addItem(withTitle: "Select All", action: #selector(NSText.selectAll(_:)), keyEquivalent: "a")
-        editMenuItem.submenu = editMenu
-        mainMenu.addItem(editMenuItem)
-
-        NSApp.mainMenu = mainMenu
+    private func makeEditMenuItem() -> NSMenuItem {
+        let menuItem = NSMenuItem()
+        let menu = NSMenu(title: "Edit")
+        menu.addItem(withTitle: "Undo", action: Selector(("undo:")), keyEquivalent: "z")
+        menu.addItem(withTitle: "Redo", action: Selector(("redo:")), keyEquivalent: "Z")
+        menu.addItem(NSMenuItem.separator())
+        menu.addItem(withTitle: "Cut", action: #selector(NSText.cut(_:)), keyEquivalent: "x")
+        menu.addItem(withTitle: "Copy", action: #selector(NSText.copy(_:)), keyEquivalent: "c")
+        menu.addItem(withTitle: "Paste", action: #selector(NSText.paste(_:)), keyEquivalent: "v")
+        menu.addItem(withTitle: "Select All", action: #selector(NSText.selectAll(_:)), keyEquivalent: "a")
+        menuItem.submenu = menu
+        return menuItem
     }
 }

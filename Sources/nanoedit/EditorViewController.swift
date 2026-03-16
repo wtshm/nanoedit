@@ -3,8 +3,10 @@ import Highlighter
 
 // NSTextView subclass that forwards Escape to close the window instead of autocomplete.
 class EscapeHandlingTextView: NSTextView {
+    private static let escapeKeyCode: UInt16 = 53
+
     override func performKeyEquivalent(with event: NSEvent) -> Bool {
-        if event.keyCode == 53 { // Escape
+        if event.keyCode == Self.escapeKeyCode {
             window?.performClose(nil)
             return true
         }
@@ -136,57 +138,51 @@ class EditorViewController: NSViewController, NSWindowDelegate, NSTextViewDelega
     }
 
     override func loadView() {
-        // Background blur effect
-        let visualEffectView = NSVisualEffectView(frame: NSRect(x: 0, y: 0, width: 600, height: 400))
-        visualEffectView.material = .hudWindow
-        visualEffectView.blendingMode = .behindWindow
-        visualEffectView.state = .active
-        visualEffectView.autoresizingMask = [.width, .height]
+        let backgroundView = makeBackgroundView()
+        let scrollView = makeScrollView(frame: backgroundView.bounds)
+        let textView = setupTextSystem(in: scrollView)
 
-        let scrollView = NSScrollView(frame: visualEffectView.bounds)
+        scrollView.documentView = textView
+        backgroundView.addSubview(scrollView)
+        self.textView = textView
+        self.view = backgroundView
+    }
+
+    private func makeBackgroundView() -> NSVisualEffectView {
+        let view = NSVisualEffectView(frame: NSRect(x: 0, y: 0, width: 600, height: 400))
+        view.material = .hudWindow
+        view.blendingMode = .behindWindow
+        view.state = .active
+        view.autoresizingMask = [.width, .height]
+        return view
+    }
+
+    private func makeScrollView(frame: NSRect) -> NSScrollView {
+        let scrollView = NSScrollView(frame: frame)
         scrollView.hasVerticalScroller = true
         scrollView.hasHorizontalScroller = false
         scrollView.autoresizingMask = [.width, .height]
         scrollView.drawsBackground = false
+        return scrollView
+    }
 
-        // Set up HighlighterSwift
+    private func setupTextSystem(in scrollView: NSScrollView) -> NSTextView {
         let textStorage = NSTextStorage()
         let layoutManager = NSLayoutManager()
         layoutManager.usesFontLeading = false
         textStorage.addLayoutManager(layoutManager)
 
-        let lineMetricsDelegate = FixedLineMetricsDelegate(
+        let lineMetrics = FixedLineMetricsDelegate(
             primaryFont: Self.editorFont,
             fallbackFont: Self.fallbackEditorFont
         )
-        layoutManager.delegate = lineMetricsDelegate
-        self.lineMetricsDelegate = lineMetricsDelegate
+        layoutManager.delegate = lineMetrics
+        self.lineMetricsDelegate = lineMetrics
 
-        let paragraphStyle = Self.makeEditorParagraphStyle(lineHeight: lineMetricsDelegate.lineHeight)
+        let paragraphStyle = Self.makeEditorParagraphStyle(lineHeight: lineMetrics.lineHeight)
         self.editorParagraphStyle = paragraphStyle
 
-        if let highlighter = Highlighter() {
-            highlighter.setTheme("atom-one-dark")
-
-            // Extract the theme's default text color from a sample highlight
-            if let sample = highlighter.highlight("x", as: "plaintext"),
-               sample.length > 0,
-               let color = sample.attribute(.foregroundColor, at: 0, effectiveRange: nil) as? NSColor {
-                self.themeTextColor = color
-            }
-
-            let delegate = HighlightingTextStorageDelegate(
-                highlighter: highlighter,
-                language: "markdown",
-                font: Self.editorFont,
-                paragraphStyle: paragraphStyle,
-                didApplyHighlighting: { [weak self] in
-                    self?.updateInputAttributes()
-                }
-            )
-            textStorage.delegate = delegate
-            self.highlightingDelegate = delegate
-        }
+        setupHighlighting(textStorage: textStorage, paragraphStyle: paragraphStyle)
 
         let containerSize = NSSize(
             width: scrollView.contentSize.width,
@@ -197,6 +193,34 @@ class EditorViewController: NSViewController, NSWindowDelegate, NSTextViewDelega
         layoutManager.addTextContainer(textContainer)
 
         let textView = EscapeHandlingTextView(frame: scrollView.bounds, textContainer: textContainer)
+        configureTextView(textView, paragraphStyle: paragraphStyle)
+        return textView
+    }
+
+    private func setupHighlighting(textStorage: NSTextStorage, paragraphStyle: NSParagraphStyle) {
+        guard let highlighter = Highlighter() else { return }
+        highlighter.setTheme("atom-one-dark")
+
+        if let sample = highlighter.highlight("x", as: "plaintext"),
+           sample.length > 0,
+           let color = sample.attribute(.foregroundColor, at: 0, effectiveRange: nil) as? NSColor {
+            self.themeTextColor = color
+        }
+
+        let delegate = HighlightingTextStorageDelegate(
+            highlighter: highlighter,
+            language: "markdown",
+            font: Self.editorFont,
+            paragraphStyle: paragraphStyle,
+            didApplyHighlighting: { [weak self] in
+                self?.updateInputAttributes()
+            }
+        )
+        textStorage.delegate = delegate
+        self.highlightingDelegate = delegate
+    }
+
+    private func configureTextView(_ textView: NSTextView, paragraphStyle: NSParagraphStyle) {
         textView.isEditable = true
         textView.isSelectable = true
         textView.allowsUndo = true
@@ -207,15 +231,9 @@ class EditorViewController: NSViewController, NSWindowDelegate, NSTextViewDelega
         textView.font = Self.editorFont
         textView.defaultParagraphStyle = paragraphStyle
         textView.delegate = self
-
         textView.drawsBackground = false
         textView.textColor = themeTextColor
         textView.insertionPointColor = themeTextColor
-
-        scrollView.documentView = textView
-        visualEffectView.addSubview(scrollView)
-        self.textView = textView
-        self.view = visualEffectView
     }
 
     override func viewDidLoad() {
