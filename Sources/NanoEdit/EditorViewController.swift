@@ -34,10 +34,15 @@ class EditorViewController: NSViewController, NSWindowDelegate {
         scrollView.autoresizingMask = [.width, .height]
 
         // Set up Highlightr with CodeAttributedString
-        let highlightr = Highlightr()!
-        highlightr.setTheme(to: "monokai")
-        let textStorage = CodeAttributedString(highlightr: highlightr)
-        textStorage.language = "markdown"
+        let textStorage: NSTextStorage
+        if let highlightr = Highlightr() {
+            highlightr.setTheme(to: "monokai")
+            let codeStorage = CodeAttributedString(highlightr: highlightr)
+            codeStorage.language = "markdown"
+            textStorage = codeStorage
+        } else {
+            textStorage = NSTextStorage()
+        }
 
         let layoutManager = NSLayoutManager()
         textStorage.addLayoutManager(layoutManager)
@@ -58,9 +63,13 @@ class EditorViewController: NSViewController, NSWindowDelegate {
         textView.isVerticallyResizable = true
         textView.isHorizontallyResizable = false
         textView.font = NSFont.monospacedSystemFont(ofSize: 13, weight: .regular)
-        textView.backgroundColor = highlightr.theme.themeBackgroundColor
 
-        // Set text color and insertion point color for dark theme
+        // Apply dark theme colors
+        if let highlightr = (textStorage as? CodeAttributedString)?.highlightr {
+            textView.backgroundColor = highlightr.theme.themeBackgroundColor
+        } else {
+            textView.backgroundColor = NSColor(red: 0.15, green: 0.15, blue: 0.15, alpha: 1.0)
+        }
         textView.textColor = .white
         textView.insertionPointColor = .white
 
@@ -79,6 +88,12 @@ class EditorViewController: NSViewController, NSWindowDelegate {
                 textView.string = content
                 originalContent = content
             } catch {
+                let alert = NSAlert()
+                alert.messageText = "Failed to read file"
+                alert.informativeText = error.localizedDescription
+                alert.alertStyle = .warning
+                alert.addButton(withTitle: "OK")
+                alert.runModal()
                 originalContent = ""
             }
         } else {
