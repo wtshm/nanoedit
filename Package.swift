@@ -14,5 +14,10 @@ let package = Package(
             dependencies: [.product(name: "Highlighter", package: "highlighterswift")],
             path: "Sources/nanoedit"
         ),
+        .testTarget(
+            name: "nanoeditTests",
+            dependencies: ["nanoedit"],
+            path: "Tests/nanoeditTests"
+        ),
     ]
 )

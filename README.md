@@ -6,6 +6,7 @@ A minimal floating text editor for macOS, designed for use as an external editor
 
 - Floating window (always on top)
 - Markdown syntax highlighting
+- `@`-mention file path completion
 - Translucent background with blur effect
 - Save and exit with `Cmd+S`
 - No Dock icon

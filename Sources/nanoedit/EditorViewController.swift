@@ -38,19 +38,24 @@ class HighlightingTextStorageDelegate: NSObject, NSTextStorageDelegate {
     private let font: NSFont
     private let paragraphStyle: NSParagraphStyle
     private let didApplyHighlighting: (() -> Void)?
+    private let shouldDeferHighlighting: (() -> Bool)?
     private var isHighlightPending = false
+    private weak var deferredTextStorage: NSTextStorage?
+    private var hasDeferredHighlightRequest = false
 
     init(
         highlighter: Highlighter,
         language: String,
         font: NSFont,
         paragraphStyle: NSParagraphStyle,
+        shouldDeferHighlighting: (() -> Bool)? = nil,
         didApplyHighlighting: (() -> Void)? = nil
     ) {
         self.highlighter = highlighter
         self.language = language
         self.font = font
         self.paragraphStyle = paragraphStyle
+        self.shouldDeferHighlighting = shouldDeferHighlighting
         self.didApplyHighlighting = didApplyHighlighting
     }
 
@@ -62,15 +67,33 @@ class HighlightingTextStorageDelegate: NSObject, NSTextStorageDelegate {
     ) {
         guard editedMask.contains(.editedCharacters), !isHighlightPending else { return }
 
+        scheduleHighlighting(for: textStorage)
+    }
+
+    private func scheduleHighlighting(for textStorage: NSTextStorage) {
         isHighlightPending = true
         DispatchQueue.main.async { [weak self, weak textStorage] in
-            guard let textStorage else { return }
-            self?.applyHighlighting(to: textStorage)
+            guard let self else { return }
+            guard let textStorage else {
+                self.isHighlightPending = false
+                self.hasDeferredHighlightRequest = false
+                return
+            }
+            self.applyHighlighting(to: textStorage)
         }
     }
 
     private func applyHighlighting(to textStorage: NSTextStorage) {
+        if shouldDeferHighlighting?() == true {
+            deferredTextStorage = textStorage
+            hasDeferredHighlightRequest = true
+            isHighlightPending = false
+            return
+        }
+
         defer { isHighlightPending = false }
+        hasDeferredHighlightRequest = false
+        deferredTextStorage = nil
 
         // Skip while IME composition is active
         for layoutManager in textStorage.layoutManagers {
@@ -94,6 +117,17 @@ class HighlightingTextStorageDelegate: NSObject, NSTextStorageDelegate {
         }
         textStorage.endEditing()
         didApplyHighlighting?()
+    }
+
+    func resumeDeferredHighlightingIfNeeded() {
+        guard hasDeferredHighlightRequest, isHighlightPending == false else { return }
+        guard shouldDeferHighlighting?() != true else { return }
+        guard let textStorage = deferredTextStorage else {
+            hasDeferredHighlightRequest = false
+            return
+        }
+
+        scheduleHighlighting(for: textStorage)
     }
 }
 
@@ -174,8 +208,6 @@ class EditorViewController: NSViewController, NSWindowDelegate, NSTextViewDelega
         let paragraphStyle = Self.makeEditorParagraphStyle(lineHeight: lineMetrics.lineHeight)
         self.editorParagraphStyle = paragraphStyle
 
-        setupHighlighting(textStorage: textStorage, paragraphStyle: paragraphStyle)
-
         let containerSize = NSSize(
             width: scrollView.contentSize.width,
             height: CGFloat.greatestFiniteMagnitude
@@ -186,11 +218,16 @@ class EditorViewController: NSViewController, NSWindowDelegate, NSTextViewDelega
 
         let textView = MentionCompletingTextView(frame: scrollView.bounds, textContainer: textContainer)
         textView.completionRootURL = URL(fileURLWithPath: workingDirectoryPath, isDirectory: true)
+        setupHighlighting(textStorage: textStorage, paragraphStyle: paragraphStyle, textView: textView)
         configureTextView(textView, paragraphStyle: paragraphStyle)
         return textView
     }
 
-    private func setupHighlighting(textStorage: NSTextStorage, paragraphStyle: NSParagraphStyle) {
+    private func setupHighlighting(
+        textStorage: NSTextStorage,
+        paragraphStyle: NSParagraphStyle,
+        textView: MentionCompletingTextView
+    ) {
         guard let highlighter = Highlighter() else { return }
         highlighter.setTheme("atom-one-dark")
 
@@ -205,10 +242,16 @@ class EditorViewController: NSViewController, NSWindowDelegate, NSTextViewDelega
             language: "markdown",
             font: Self.editorFont,
             paragraphStyle: paragraphStyle,
+            shouldDeferHighlighting: { [weak textView] in
+                textView?.hasActiveMentionCompletion() == true
+            },
             didApplyHighlighting: { [weak self] in
                 self?.updateInputAttributes()
             }
         )
+        textView.onCompletionSessionEnded = { [weak delegate] in
+            delegate?.resumeDeferredHighlightingIfNeeded()
+        }
         textStorage.delegate = delegate
         self.highlightingDelegate = delegate
     }
