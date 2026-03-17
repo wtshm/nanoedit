@@ -210,6 +210,10 @@ private final class MentionCompletionPopupView: NSVisualEffectView, NSTableViewD
         return textField
     }
 
+    func tableView(_ tableView: NSTableView, rowViewForRow row: Int) -> NSTableRowView? {
+        MentionCompletionRowView()
+    }
+
     @objc private func handleTableAction(_ sender: Any?) {
         let row = tableView.clickedRow
         guard candidates.indices.contains(row) else { return }
@@ -227,6 +231,45 @@ private final class MentionCompletionPopupView: NSVisualEffectView, NSTableViewD
     }
 }
 
+private final class MentionCompletionRowView: NSTableRowView {
+    override func drawSelection(in dirtyRect: NSRect) {
+        let selectionRect = bounds.insetBy(dx: 0, dy: 1)
+        NSColor(white: 1.0, alpha: 0.12).setFill()
+        selectionRect.fill()
+    }
+}
+
+private final class MentionCompletionPopupWindow: NSWindow {
+    init(contentView: NSView) {
+        super.init(
+            contentRect: NSRect(origin: .zero, size: contentView.frame.size),
+            styleMask: [.borderless],
+            backing: .buffered,
+            defer: false
+        )
+
+        let rootView = NSView(frame: NSRect(origin: .zero, size: contentView.frame.size))
+        rootView.wantsLayer = true
+        rootView.layer?.backgroundColor = NSColor.clear.cgColor
+        contentView.frame = rootView.bounds
+        contentView.autoresizingMask = [.width, .height]
+        rootView.addSubview(contentView)
+        self.contentView = rootView
+        isOpaque = false
+        backgroundColor = .clear
+        hasShadow = true
+        isReleasedWhenClosed = false
+        level = .floating
+        collectionBehavior = [.transient, .moveToActiveSpace]
+        animationBehavior = .none
+        isExcludedFromWindowsMenu = true
+    }
+
+    override var canBecomeKey: Bool { false }
+
+    override var canBecomeMain: Bool { false }
+}
+
 // Provides @-mention file path completion using a custom popup.
 final class MentionCompletingTextView: EscapeHandlingTextView {
     var completionRootURL: URL?
@@ -235,6 +278,7 @@ final class MentionCompletingTextView: EscapeHandlingTextView {
     private let mentionParser = MentionCompletionParser()
     private var isApplyingMentionCompletion = false
     private var completionSession: MentionCompletionSession?
+    private var popupWindow: MentionCompletionPopupWindow?
     private weak var observedClipView: NSClipView?
     private weak var observedWindow: NSWindow?
 
@@ -261,6 +305,7 @@ final class MentionCompletingTextView: EscapeHandlingTextView {
     }
 
     deinit {
+        detachPopupWindow()
         NotificationCenter.default.removeObserver(self)
     }
 
@@ -411,18 +456,20 @@ final class MentionCompletingTextView: EscapeHandlingTextView {
     }
 
     private func showOrUpdatePopup(for candidates: [String], selectedIndex: Int) {
-        guard let hostView = popupHostView(),
-              let popupFrame = popupFrame(for: candidates, in: hostView) else {
+        guard let parentWindow = window,
+              let popupFrame = popupFrame(for: candidates, in: parentWindow) else {
             dismissMentionCompletion()
             return
         }
 
-        if popupView.superview !== hostView {
-            popupView.removeFromSuperview()
-            hostView.addSubview(popupView)
+        let popupWindow = makePopupWindowIfNeeded()
+        if popupWindow.parent !== parentWindow {
+            detachPopupWindow()
+            parentWindow.addChildWindow(popupWindow, ordered: .above)
         }
 
-        popupView.frame = popupFrame
+        popupWindow.setFrame(popupFrame, display: false)
+        popupWindow.orderFront(nil)
         popupView.update(candidates: candidates, selectedIndex: selectedIndex)
     }
 
@@ -433,25 +480,41 @@ final class MentionCompletingTextView: EscapeHandlingTextView {
 
     @discardableResult
     private func dismissMentionCompletion(notify: Bool = true) -> Bool {
-        let hadActiveSession = completionSession != nil
+        guard completionSession != nil else { return false }
         completionSession = nil
-        popupView.removeFromSuperview()
+        detachPopupWindow()
 
-        if notify && hadActiveSession {
+        if notify {
             onCompletionSessionEnded?()
         }
 
-        return hadActiveSession
+        return true
     }
 
-    private func popupHostView() -> NSView? {
-        enclosingScrollView?.superview ?? superview ?? window?.contentView
+    private func detachPopupWindow() {
+        guard let popupWindow else { return }
+        popupWindow.orderOut(nil)
+        popupWindow.parent?.removeChildWindow(popupWindow)
+    }
+
+    private func makePopupWindowIfNeeded() -> MentionCompletionPopupWindow {
+        if let popupWindow {
+            return popupWindow
+        }
+
+        popupView.frame = NSRect(origin: .zero, size: .zero)
+        popupView.autoresizingMask = [.width, .height]
+        let popupWindow = MentionCompletionPopupWindow(contentView: popupView)
+        self.popupWindow = popupWindow
+        return popupWindow
     }
 
     private func isMouseEventInsidePopup() -> Bool {
-        guard popupView.superview != nil,
+        guard let popupWindow,
+              popupWindow.isVisible,
               let event = NSApp.currentEvent,
-              event.type == .leftMouseDown || event.type == .leftMouseUp else {
+              event.type == .leftMouseDown || event.type == .leftMouseUp,
+              event.window === popupWindow else {
             return false
         }
 
@@ -459,28 +522,20 @@ final class MentionCompletingTextView: EscapeHandlingTextView {
         return popupView.bounds.contains(point)
     }
 
-    private func popupFrame(for candidates: [String], in hostView: NSView) -> NSRect? {
+    private func popupFrame(for candidates: [String], in parentWindow: NSWindow) -> NSRect? {
         guard let caretRectInWindow = currentCaretRectInWindow() else {
             return nil
         }
 
-        let hostRect = hostView.convert(caretRectInWindow, from: nil)
+        let caretRectInScreen = parentWindow.convertToScreen(caretRectInWindow)
         let popupSize = popupView.preferredSize(for: candidates)
         let horizontalPadding: CGFloat = 6
         let verticalPadding: CGFloat = 4
 
-        var originX = min(hostRect.minX, hostView.bounds.maxX - popupSize.width - horizontalPadding)
-        originX = max(horizontalPadding, originX)
+        var originX = min(caretRectInScreen.minX, parentWindow.frame.maxX - popupSize.width - horizontalPadding)
+        originX = max(parentWindow.frame.minX + horizontalPadding, originX)
 
-        let hasRoomBelow = hostRect.minY - popupSize.height - verticalPadding >= hostView.bounds.minY
-        var originY = hasRoomBelow
-            ? hostRect.minY - popupSize.height - verticalPadding
-            : hostRect.maxY + verticalPadding
-
-        if originY + popupSize.height > hostView.bounds.maxY - verticalPadding {
-            originY = hostView.bounds.maxY - popupSize.height - verticalPadding
-        }
-        originY = max(verticalPadding, originY)
+        let originY = caretRectInScreen.minY - popupSize.height - verticalPadding
 
         return NSRect(origin: NSPoint(x: originX, y: originY), size: popupSize)
     }
