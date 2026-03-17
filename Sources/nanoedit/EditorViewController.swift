@@ -16,7 +16,7 @@ class EscapeHandlingTextView: NSTextView {
 
 private final class FixedLineMetricsDelegate: NSObject, NSLayoutManagerDelegate {
     let lineHeight: CGFloat
-    private let baselineY: CGFloat
+    private let baselineOffset: CGFloat
 
     init(primaryFont: NSFont, fallbackFont: NSFont?) {
         let fonts = [primaryFont, fallbackFont].compactMap { $0 }
@@ -25,7 +25,7 @@ private final class FixedLineMetricsDelegate: NSObject, NSLayoutManagerDelegate 
 
         let padding: CGFloat = 4
         self.lineHeight = ceil(ascender + descender) + padding
-        self.baselineY = ceil(ascender) + padding / 2
+        self.baselineOffset = ceil(ascender) + padding / 2
     }
 
     func layoutManager(
@@ -38,7 +38,7 @@ private final class FixedLineMetricsDelegate: NSObject, NSLayoutManagerDelegate 
     ) -> Bool {
         lineFragmentRect.pointee.size.height = lineHeight
         lineFragmentUsedRect.pointee.size.height = lineHeight
-        baselineOffset.pointee = baselineY
+        baselineOffset.pointee = self.baselineOffset
         return true
     }
 }
@@ -50,7 +50,7 @@ class HighlightingTextStorageDelegate: NSObject, NSTextStorageDelegate {
     private let font: NSFont
     private let paragraphStyle: NSParagraphStyle
     private let didApplyHighlighting: (() -> Void)?
-    private var pendingHighlight = false
+    private var isHighlightPending = false
 
     init(
         highlighter: Highlighter,
@@ -72,9 +72,9 @@ class HighlightingTextStorageDelegate: NSObject, NSTextStorageDelegate {
         range editedRange: NSRange,
         changeInLength delta: Int
     ) {
-        guard editedMask.contains(.editedCharacters), !pendingHighlight else { return }
+        guard editedMask.contains(.editedCharacters), !isHighlightPending else { return }
 
-        pendingHighlight = true
+        isHighlightPending = true
         DispatchQueue.main.async { [weak self, weak textStorage] in
             guard let textStorage else { return }
             self?.applyHighlighting(to: textStorage)
@@ -82,7 +82,7 @@ class HighlightingTextStorageDelegate: NSObject, NSTextStorageDelegate {
     }
 
     private func applyHighlighting(to textStorage: NSTextStorage) {
-        defer { pendingHighlight = false }
+        defer { isHighlightPending = false }
 
         // Skip while IME composition is active
         for layoutManager in textStorage.layoutManagers {
@@ -99,10 +99,10 @@ class HighlightingTextStorageDelegate: NSObject, NSTextStorageDelegate {
 
         textStorage.beginEditing()
         highlighted.enumerateAttributes(in: fullRange) { attrs, range, _ in
-            var merged = attrs
-            merged[.font] = font
-            merged[.paragraphStyle] = paragraphStyle
-            textStorage.setAttributes(merged, range: range)
+            var mergedAttributes = attrs
+            mergedAttributes[.font] = font
+            mergedAttributes[.paragraphStyle] = paragraphStyle
+            textStorage.setAttributes(mergedAttributes, range: range)
         }
         textStorage.endEditing()
         didApplyHighlighting?()
@@ -110,8 +110,9 @@ class HighlightingTextStorageDelegate: NSObject, NSTextStorageDelegate {
 }
 
 class EditorViewController: NSViewController, NSWindowDelegate, NSTextViewDelegate {
-    static let editorFont = NSFont(name: "Menlo", size: 13) ?? NSFont.monospacedSystemFont(ofSize: 13, weight: .regular)
-    static let fallbackEditorFont = NSFont(name: "Hiragino Sans", size: editorFont.pointSize)
+    static let editorFontSize: CGFloat = 13
+    static let editorFont = NSFont(name: "Menlo", size: editorFontSize) ?? NSFont.monospacedSystemFont(ofSize: editorFontSize, weight: .regular)
+    static let fallbackEditorFont = NSFont(name: "Hiragino Sans", size: editorFontSize)
 
     static func makeEditorParagraphStyle(lineHeight: CGFloat) -> NSParagraphStyle {
         let paragraphStyle = NSMutableParagraphStyle()
@@ -201,9 +202,9 @@ class EditorViewController: NSViewController, NSWindowDelegate, NSTextViewDelega
         guard let highlighter = Highlighter() else { return }
         highlighter.setTheme("atom-one-dark")
 
-        if let sample = highlighter.highlight("x", as: "plaintext"),
-           sample.length > 0,
-           let color = sample.attribute(.foregroundColor, at: 0, effectiveRange: nil) as? NSColor {
+        if let sampleHighlight = highlighter.highlight("x", as: "plaintext"),
+           sampleHighlight.length > 0,
+           let color = sampleHighlight.attribute(.foregroundColor, at: 0, effectiveRange: nil) as? NSColor {
             self.themeTextColor = color
         }
 
