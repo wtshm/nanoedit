@@ -17,12 +17,14 @@ class EscapeHandlingTextView: NSTextView {
     }
 }
 
+// Represents a detected @-mention and its text ranges.
 struct MentionMatch: Equatable {
     let completionRange: NSRange
     let typedPath: String
     let replacementRange: NSRange
 }
 
+// Parses text to find @-mention triggers at the cursor position.
 struct MentionCompletionParser {
     func findMention(in text: String, selectionRange: NSRange) -> MentionMatch? {
         let nsString = text as NSString
@@ -88,6 +90,7 @@ struct MentionCompletionParser {
     }
 }
 
+// Tracks the state of an active mention completion session.
 private struct MentionCompletionSession {
     let match: MentionMatch
     let candidates: [String]
@@ -99,6 +102,7 @@ private struct MentionCompletionSession {
     }
 }
 
+// Table-based popup view that displays mention completion candidates.
 private final class MentionCompletionPopupView: NSVisualEffectView, NSTableViewDataSource, NSTableViewDelegate {
     private static let maxVisibleRows = 8
     private static let horizontalPadding: CGFloat = 12
@@ -248,6 +252,7 @@ private final class MentionCompletionPopupView: NSVisualEffectView, NSTableViewD
     }
 }
 
+// Custom row view with translucent selection highlight.
 private final class MentionCompletionRowView: NSTableRowView {
     override func drawSelection(in dirtyRect: NSRect) {
         let selectionRect = bounds.insetBy(dx: 0, dy: 1)
@@ -256,6 +261,7 @@ private final class MentionCompletionRowView: NSTableRowView {
     }
 }
 
+// Borderless floating window that hosts the mention completion popup.
 private final class MentionCompletionPopupWindow: NSWindow {
     init(contentView: NSView) {
         super.init(
