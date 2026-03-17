@@ -129,6 +129,7 @@ private final class MentionCompletionPopupView: NSVisualEffectView, NSTableViewD
 
         tableColumn.resizingMask = .autoresizingMask
         tableView.addTableColumn(tableColumn)
+        tableView.style = .fullWidth
         tableView.headerView = nil
         tableView.focusRingType = .none
         tableView.backgroundColor = .clear
@@ -160,19 +161,25 @@ private final class MentionCompletionPopupView: NSVisualEffectView, NSTableViewD
 
     override func layout() {
         super.layout()
-        scrollView.frame = bounds.insetBy(dx: Self.borderInset, dy: Self.borderInset)
+        scrollView.frame = NSRect(
+            x: Self.borderInset,
+            y: Self.borderInset + Self.verticalPadding,
+            width: bounds.width - Self.borderInset * 2,
+            height: bounds.height - Self.borderInset * 2 - Self.verticalPadding * 2
+        )
         tableColumn.width = scrollView.contentSize.width
         tableView.frame = NSRect(origin: .zero, size: tableContentSize(for: candidates))
     }
 
     func preferredSize(for candidates: [String]) -> NSSize {
         let contentSize = tableContentSize(for: candidates)
+        let visibleContentHeight = min(
+            contentSize.height,
+            CGFloat(Self.maxVisibleRows) * tableView.rowHeight
+        )
         return NSSize(
             width: contentSize.width + Self.borderInset * 2,
-            height: min(
-                contentSize.height,
-                CGFloat(Self.maxVisibleRows) * tableView.rowHeight + Self.verticalPadding * 2
-            ) + Self.borderInset * 2
+            height: visibleContentHeight + Self.verticalPadding * 2 + Self.borderInset * 2
         )
     }
 
@@ -195,19 +202,29 @@ private final class MentionCompletionPopupView: NSVisualEffectView, NSTableViewD
 
     func tableView(_ tableView: NSTableView, viewFor tableColumn: NSTableColumn?, row: Int) -> NSView? {
         let identifier = NSUserInterfaceItemIdentifier("candidateCell")
-        let textField: NSTextField
-        if let reusedView = tableView.makeView(withIdentifier: identifier, owner: self) as? NSTextField {
-            textField = reusedView
+        let cellView: NSTableCellView
+        if let reusedView = tableView.makeView(withIdentifier: identifier, owner: self) as? NSTableCellView {
+            cellView = reusedView
         } else {
-            textField = NSTextField(labelWithString: "")
-            textField.identifier = identifier
+            let textField = NSTextField(labelWithString: "")
             textField.lineBreakMode = .byTruncatingMiddle
             textField.font = popupFont
             textField.textColor = .labelColor
+            textField.translatesAutoresizingMaskIntoConstraints = false
+
+            cellView = NSTableCellView()
+            cellView.identifier = identifier
+            cellView.textField = textField
+            cellView.addSubview(textField)
+            NSLayoutConstraint.activate([
+                textField.leadingAnchor.constraint(equalTo: cellView.leadingAnchor, constant: Self.horizontalPadding),
+                textField.trailingAnchor.constraint(lessThanOrEqualTo: cellView.trailingAnchor, constant: -Self.horizontalPadding),
+                textField.centerYAnchor.constraint(equalTo: cellView.centerYAnchor),
+            ])
         }
 
-        textField.stringValue = candidates[row]
-        return textField
+        cellView.textField?.stringValue = candidates[row]
+        return cellView
     }
 
     func tableView(_ tableView: NSTableView, rowViewForRow row: Int) -> NSTableRowView? {
@@ -226,7 +243,7 @@ private final class MentionCompletionPopupView: NSVisualEffectView, NSTableViewD
             .map { ($0 as NSString).size(withAttributes: attributes).width }
             .max() ?? 160
         let width = min(max(widestCandidate + Self.horizontalPadding * 2, 220), 520)
-        let height = CGFloat(candidates.count) * tableView.rowHeight + Self.verticalPadding * 2
+        let height = CGFloat(candidates.count) * tableView.rowHeight
         return NSSize(width: width, height: height)
     }
 }
