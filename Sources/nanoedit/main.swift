@@ -7,11 +7,12 @@ guard CommandLine.arguments.count >= 2 else {
 }
 
 let filePath = CommandLine.arguments[1]
+let workingDirectoryPath = FileManager.default.currentDirectoryPath
 
 // Redirect stderr to suppress system-level error messages
 freopen("/dev/null", "w", stderr)
 
 let app = NSApplication.shared
-let delegate = AppDelegate(filePath: filePath)
+let delegate = AppDelegate(filePath: filePath, workingDirectoryPath: workingDirectoryPath)
 app.delegate = delegate
 app.run()

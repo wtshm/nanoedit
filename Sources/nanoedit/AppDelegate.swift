@@ -2,10 +2,12 @@ import AppKit
 
 class AppDelegate: NSObject, NSApplicationDelegate {
     let filePath: String
+    let workingDirectoryPath: String
     private var window: EditorWindow?
 
-    init(filePath: String) {
+    init(filePath: String, workingDirectoryPath: String) {
         self.filePath = filePath
+        self.workingDirectoryPath = workingDirectoryPath
         super.init()
     }
 
@@ -15,7 +17,10 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
-        let viewController = EditorViewController(filePath: filePath)
+        let viewController = EditorViewController(
+            filePath: filePath,
+            workingDirectoryPath: workingDirectoryPath
+        )
         let window = EditorWindow(contentViewController: viewController)
         window.makeKeyAndOrderFront(nil)
         self.window = window

@@ -14,6 +14,301 @@ class EscapeHandlingTextView: NSTextView {
     }
 }
 
+final class MentionAwareTextView: EscapeHandlingTextView {
+    struct MentionQuery {
+        let completionRange: NSRange
+        let typedPath: String
+        let replacementRange: NSRange
+    }
+
+    private enum EditKind {
+        case none
+        case insertion
+        case deletion
+        case replacement
+    }
+
+    private static let maxCompletionCandidates = 10000
+
+    var completionRootURL: URL?
+    private var isApplyingMentionCompletion = false
+    private var lastEditKind: EditKind = .none
+
+    override var rangeForUserCompletion: NSRange {
+        if let mentionQuery = makeMentionQuery() {
+            return mentionQuery.completionRange
+        }
+        return super.rangeForUserCompletion
+    }
+
+    override func completions(
+        forPartialWordRange charRange: NSRange,
+        indexOfSelectedItem index: UnsafeMutablePointer<Int>
+    ) -> [String]? {
+        guard let mentionQuery = makeMentionQuery(),
+              NSEqualRanges(mentionQuery.completionRange, charRange),
+              let completionRootURL else {
+            return super.completions(forPartialWordRange: charRange, indexOfSelectedItem: index)
+        }
+
+        let completions = makeFileCompletions(for: mentionQuery.typedPath, rootURL: completionRootURL)
+        if completions.isEmpty {
+            return []
+        }
+
+        index.pointee = 0
+        return completions
+    }
+
+    override func insertCompletion(
+        _ word: String,
+        forPartialWordRange charRange: NSRange,
+        movement: Int,
+        isFinal flag: Bool
+    ) {
+        guard let mentionQuery = makeMentionQuery(),
+              NSEqualRanges(mentionQuery.completionRange, charRange) else {
+            super.insertCompletion(word, forPartialWordRange: charRange, movement: movement, isFinal: flag)
+            return
+        }
+
+        guard flag else { return }
+        guard shouldCommitMentionCompletion(for: movement) else { return }
+
+        let completedWord = "\(word) "
+        let completedWordLength = (completedWord as NSString).length
+
+        guard shouldChangeText(in: mentionQuery.replacementRange, replacementString: completedWord) else { return }
+
+        isApplyingMentionCompletion = true
+        textStorage?.replaceCharacters(in: mentionQuery.replacementRange, with: completedWord)
+        didChangeText()
+        setSelectedRange(NSRange(
+            location: mentionQuery.replacementRange.location + completedWordLength,
+            length: 0
+        ))
+        isApplyingMentionCompletion = false
+    }
+
+    override func didChangeText() {
+        super.didChangeText()
+
+        guard isApplyingMentionCompletion == false else { return }
+        guard hasMarkedText() == false else { return }
+
+        defer { lastEditKind = .none }
+        guard lastEditKind == .insertion else { return }
+        guard makeMentionQuery() != nil else { return }
+
+        complete(nil)
+    }
+
+    override func shouldChangeText(in affectedCharRange: NSRange, replacementString: String?) -> Bool {
+        if isApplyingMentionCompletion {
+            return super.shouldChangeText(in: affectedCharRange, replacementString: replacementString)
+        }
+
+        let replacementLength = ((replacementString ?? "") as NSString).length
+        if affectedCharRange.length == 0, replacementLength > 0 {
+            lastEditKind = .insertion
+        } else if affectedCharRange.length > 0, replacementLength == 0 {
+            lastEditKind = .deletion
+        } else if affectedCharRange.length > 0 || replacementLength > 0 {
+            lastEditKind = .replacement
+        } else {
+            lastEditKind = .none
+        }
+
+        return super.shouldChangeText(in: affectedCharRange, replacementString: replacementString)
+    }
+
+    private func makeMentionQuery() -> MentionQuery? {
+        let selectionRange = selectedRange()
+        let nsString = string as NSString
+        let cursorLocation = selectionRange.location
+        let selectionEnd = selectionRange.location + selectionRange.length
+        guard cursorLocation <= nsString.length, selectionEnd <= nsString.length else { return nil }
+
+        var scanLocation = cursorLocation
+        while scanLocation > 0 {
+            let scalarValue = nsString.character(at: scanLocation - 1)
+            guard let scalar = UnicodeScalar(scalarValue) else { return nil }
+
+            if CharacterSet.whitespacesAndNewlines.contains(scalar) {
+                return nil
+            }
+
+            if scalar == "@" {
+                let completionRange = NSRange(
+                    location: scanLocation,
+                    length: cursorLocation - scanLocation
+                )
+                let replacementRange = NSRange(
+                    location: scanLocation - 1,
+                    length: findMentionPathEnd(in: nsString, from: selectionEnd) - (scanLocation - 1)
+                )
+                let typedPath = nsString.substring(with: completionRange)
+                return MentionQuery(
+                    completionRange: completionRange,
+                    typedPath: typedPath,
+                    replacementRange: replacementRange
+                )
+            }
+
+            guard Self.isMentionPathCharacter(scalar) else {
+                return nil
+            }
+
+            scanLocation -= 1
+        }
+
+        return nil
+    }
+
+    private func shouldCommitMentionCompletion(for movement: Int) -> Bool {
+        switch movement {
+        case NSTextMovement.cancel.rawValue:
+            return false
+        case NSTextMovement.tab.rawValue, NSTextMovement.return.rawValue:
+            return true
+        case NSTextMovement.other.rawValue:
+            switch NSApp.currentEvent?.type {
+            case .leftMouseDown, .leftMouseUp:
+                return true
+            default:
+                return false
+            }
+        default:
+            return false
+        }
+    }
+
+    private func findMentionPathEnd(in text: NSString, from location: Int) -> Int {
+        var scanLocation = location
+        while scanLocation < text.length {
+            let scalarValue = text.character(at: scanLocation)
+            guard let scalar = UnicodeScalar(scalarValue),
+                  Self.isMentionPathCharacter(scalar) else { break }
+            scanLocation += 1
+        }
+        return scanLocation
+    }
+
+    private func makeFileCompletions(for typedPath: String, rootURL: URL) -> [String] {
+        let pathParts = splitTypedPath(typedPath)
+        let searchDirectoryURL: URL
+        if pathParts.parentPath.isEmpty {
+            searchDirectoryURL = rootURL
+        } else {
+            searchDirectoryURL = rootURL.appendingPathComponent(pathParts.parentPath, isDirectory: true)
+        }
+        let searchDirectoryPath = searchDirectoryURL.standardizedFileURL.path
+
+        var options: FileManager.DirectoryEnumerationOptions = [.skipsPackageDescendants]
+        if pathParts.namePrefix.hasPrefix(".") == false {
+            options.insert(.skipsHiddenFiles)
+        }
+
+        let fileURLs = makeCandidateFileURLs(
+            in: searchDirectoryURL,
+            options: options,
+            recursively: pathParts.namePrefix.isEmpty == false
+        )
+
+        let prefixLength = searchDirectoryPath.count + 1 // +1 for trailing "/"
+        var completions = fileURLs.compactMap { fileURL -> (value: String, isDirectory: Bool)? in
+            let fullPath = fileURL.standardizedFileURL.path
+            guard fullPath.hasPrefix(searchDirectoryPath),
+                  fullPath.count > prefixLength else { return nil }
+            let relativePath = String(fullPath.dropFirst(prefixLength))
+            guard relativePath.hasPrefix(pathParts.namePrefix) else { return nil }
+            guard relativePath != pathParts.namePrefix else { return nil }
+
+            let isDirectory = (try? fileURL.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) ?? false
+            let completionValue = pathParts.parentPath.isEmpty
+                ? relativePath
+                : "\(pathParts.parentPath)/\(relativePath)"
+            return (isDirectory ? "\(completionValue)/" : completionValue, isDirectory)
+        }
+
+        for dotEntry in makeDotEntryCompletions(for: pathParts) {
+            completions.append((dotEntry, true))
+        }
+
+        completions.sort { lhs, rhs in
+            if lhs.isDirectory != rhs.isDirectory {
+                return lhs.isDirectory && !rhs.isDirectory
+            }
+            return lhs.value.localizedStandardCompare(rhs.value) == .orderedAscending
+        }
+
+        return completions.map(\.value)
+    }
+
+    private func makeCandidateFileURLs(
+        in directoryURL: URL,
+        options: FileManager.DirectoryEnumerationOptions,
+        recursively: Bool
+    ) -> [URL] {
+        if recursively == false {
+            return (try? FileManager.default.contentsOfDirectory(
+                at: directoryURL,
+                includingPropertiesForKeys: [.isDirectoryKey],
+                options: options
+            )) ?? []
+        }
+
+        guard let enumerator = FileManager.default.enumerator(
+            at: directoryURL,
+            includingPropertiesForKeys: [.isDirectoryKey],
+            options: options
+        ) else {
+            return []
+        }
+
+        var results: [URL] = []
+        results.reserveCapacity(min(Self.maxCompletionCandidates, 256))
+        for case let url as URL in enumerator {
+            results.append(url)
+            if results.count >= Self.maxCompletionCandidates { break }
+        }
+        return results
+    }
+
+    private func splitTypedPath(_ typedPath: String) -> (parentPath: String, namePrefix: String) {
+        guard typedPath.isEmpty == false else { return ("", "") }
+
+        if typedPath.hasSuffix("/") {
+            return (String(typedPath.dropLast()), "")
+        }
+
+        guard let slashIndex = typedPath.lastIndex(of: "/") else {
+            return ("", typedPath)
+        }
+
+        let parentPath = String(typedPath[..<slashIndex])
+        let namePrefix = String(typedPath[typedPath.index(after: slashIndex)...])
+        return (parentPath, namePrefix)
+    }
+
+    private func makeDotEntryCompletions(for pathParts: (parentPath: String, namePrefix: String)) -> [String] {
+        guard pathParts.parentPath.isEmpty else { return [] }
+        guard pathParts.namePrefix.hasPrefix(".") else { return [] }
+
+        return ["./", "../"].filter { $0.hasPrefix(pathParts.namePrefix) }
+    }
+
+    private static let mentionPathCharacters: CharacterSet = {
+        var set = CharacterSet.alphanumerics
+        set.insert(charactersIn: "/._-~")
+        return set
+    }()
+
+    private static func isMentionPathCharacter(_ scalar: UnicodeScalar) -> Bool {
+        mentionPathCharacters.contains(scalar)
+    }
+}
+
 private final class FixedLineMetricsDelegate: NSObject, NSLayoutManagerDelegate {
     let lineHeight: CGFloat
     private let baselineOffset: CGFloat
@@ -122,6 +417,7 @@ class EditorViewController: NSViewController, NSWindowDelegate, NSTextViewDelega
     }
 
     let filePath: String
+    let workingDirectoryPath: String
     private var textView: NSTextView!
     private var originalContent: String = ""
     private var highlightingDelegate: HighlightingTextStorageDelegate?
@@ -129,8 +425,9 @@ class EditorViewController: NSViewController, NSWindowDelegate, NSTextViewDelega
     private var editorParagraphStyle: NSParagraphStyle!
     private var themeTextColor: NSColor = .white
 
-    init(filePath: String) {
+    init(filePath: String, workingDirectoryPath: String) {
         self.filePath = filePath
+        self.workingDirectoryPath = workingDirectoryPath
         super.init(nibName: nil, bundle: nil)
     }
 
@@ -193,7 +490,8 @@ class EditorViewController: NSViewController, NSWindowDelegate, NSTextViewDelega
         textContainer.widthTracksTextView = true
         layoutManager.addTextContainer(textContainer)
 
-        let textView = EscapeHandlingTextView(frame: scrollView.bounds, textContainer: textContainer)
+        let textView = MentionAwareTextView(frame: scrollView.bounds, textContainer: textContainer)
+        textView.completionRootURL = URL(fileURLWithPath: workingDirectoryPath, isDirectory: true)
         configureTextView(textView, paragraphStyle: paragraphStyle)
         return textView
     }
