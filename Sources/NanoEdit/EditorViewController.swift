@@ -176,7 +176,7 @@ class EditorViewController: NSViewController, NSWindowDelegate, NSTextViewDelega
 
     private func makeBackgroundView() -> NSVisualEffectView {
         let view = NSVisualEffectView(frame: NSRect(x: 0, y: 0, width: 600, height: 400))
-        view.material = .hudWindow
+        view.material = .sidebar
         view.blendingMode = .behindWindow
         view.state = .active
         view.autoresizingMask = [.width, .height]

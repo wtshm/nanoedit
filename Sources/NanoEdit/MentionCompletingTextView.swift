@@ -122,7 +122,7 @@ private final class MentionCompletionPopupView: NSVisualEffectView, NSTableViewD
     init() {
         super.init(frame: .zero)
 
-        material = .menu
+        material = .popover
         blendingMode = .withinWindow
         state = .active
         wantsLayer = true
