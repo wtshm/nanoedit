@@ -48,6 +48,11 @@ Add to `~/.claude/settings.json`:
 }
 ```
 
+> [!NOTE]
+> In Claude Code, the session output currently disappears after an external editor exits. Resizing the terminal restores it.
+>
+> https://github.com/anthropics/claude-code/issues/32467
+
 ## Key Bindings
 
 | Key | Action |
