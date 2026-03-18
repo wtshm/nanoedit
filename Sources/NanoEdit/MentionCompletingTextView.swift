@@ -665,48 +665,112 @@ final class MentionCompletingTextView: EscapeHandlingTextView {
 
 // Generates file path completion candidates from the filesystem.
 struct FilePathCompleter {
-    private static let maxCandidates = 10000
+    private static let maxCandidates = 1000
     let rootURL: URL
 
     func completions(for typedPath: String) -> [String] {
-        let pathParts = splitTypedPath(typedPath)
-        let searchDirectoryURL: URL
-        if pathParts.parentPath.isEmpty {
-            searchDirectoryURL = rootURL
-        } else {
-            searchDirectoryURL = rootURL.appendingPathComponent(pathParts.parentPath, isDirectory: true)
+        if typedPath.contains("/") {
+            return pathNavigationCompletions(for: typedPath)
         }
-        let searchDirectoryPath = searchDirectoryURL.standardizedFileURL.path
+        return fileNameSearchCompletions(for: typedPath)
+    }
+
+    // Searches the entire tree for files/directories whose name starts with the query.
+    // Collects matches lazily up to maxCandidates.
+    private func fileNameSearchCompletions(for query: String) -> [String] {
+        var options: FileManager.DirectoryEnumerationOptions = [.skipsPackageDescendants]
+        if query.hasPrefix(".") == false {
+            options.insert(.skipsHiddenFiles)
+        }
+
+        let rootPath = rootURL.standardizedFileURL.path
+        let prefixLength = rootPath.count + 1
+
+        // Empty query: list immediate children only.
+        guard query.isEmpty == false else {
+            return buildCompletions(
+                from: listDirectory(rootURL, options: options),
+                rootPath: rootPath,
+                prefixLength: prefixLength,
+                parentPath: ""
+            )
+        }
+
+        guard let enumerator = FileManager.default.enumerator(
+            at: rootURL,
+            includingPropertiesForKeys: [.isDirectoryKey],
+            options: options
+        ) else { return [] }
+
+        var matches: [(value: String, isDirectory: Bool)] = []
+        for case let url as URL in enumerator {
+            guard url.lastPathComponent.hasPrefix(query) else { continue }
+
+            let fullPath = url.standardizedFileURL.path
+            guard fullPath.hasPrefix(rootPath),
+                  fullPath.count > prefixLength else { continue }
+            let relativePath = String(fullPath.dropFirst(prefixLength))
+
+            let isDirectory = (try? url.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) ?? false
+            matches.append((isDirectory ? "\(relativePath)/" : relativePath, isDirectory))
+            if matches.count >= Self.maxCandidates { break }
+        }
+
+        matches.sort { lhs, rhs in
+            if lhs.isDirectory != rhs.isDirectory {
+                return lhs.isDirectory && !rhs.isDirectory
+            }
+            return lhs.value.localizedStandardCompare(rhs.value) == .orderedAscending
+        }
+
+        return matches.map(\.value)
+    }
+
+    // Navigates into the directory specified by the path and lists its contents.
+    private func pathNavigationCompletions(for typedPath: String) -> [String] {
+        let pathParts = splitTypedPath(typedPath)
+        let searchDirectoryURL = rootURL.appendingPathComponent(pathParts.parentPath, isDirectory: true)
 
         var options: FileManager.DirectoryEnumerationOptions = [.skipsPackageDescendants]
         if pathParts.namePrefix.hasPrefix(".") == false {
             options.insert(.skipsHiddenFiles)
         }
 
-        let fileURLs = candidateFileURLs(
-            in: searchDirectoryURL,
-            options: options,
-            recursively: pathParts.namePrefix.isEmpty == false
-        )
+        let rootPath = searchDirectoryURL.standardizedFileURL.path
+        let prefixLength = rootPath.count + 1
 
-        let directoryPrefixLength = searchDirectoryPath.count + 1
+        return buildCompletions(
+            from: listDirectory(searchDirectoryURL, options: options),
+            rootPath: rootPath,
+            prefixLength: prefixLength,
+            parentPath: pathParts.parentPath,
+            namePrefix: pathParts.namePrefix
+        )
+    }
+
+    private func buildCompletions(
+        from fileURLs: [URL],
+        rootPath: String,
+        prefixLength: Int,
+        parentPath: String,
+        namePrefix: String = ""
+    ) -> [String] {
         var completions = fileURLs.compactMap { fileURL -> (value: String, isDirectory: Bool)? in
             let fullPath = fileURL.standardizedFileURL.path
-            guard fullPath.hasPrefix(searchDirectoryPath),
-                  fullPath.count > directoryPrefixLength else { return nil }
-            let relativePath = String(fullPath.dropFirst(directoryPrefixLength))
-            guard relativePath.hasPrefix(pathParts.namePrefix) else { return nil }
-            guard relativePath != pathParts.namePrefix else { return nil }
+            guard fullPath.hasPrefix(rootPath),
+                  fullPath.count > prefixLength else { return nil }
+            let name = String(fullPath.dropFirst(prefixLength))
+            guard name.hasPrefix(namePrefix), name != namePrefix else { return nil }
 
             let isDirectory = (try? fileURL.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) ?? false
-            let completionValue = pathParts.parentPath.isEmpty
-                ? relativePath
-                : "\(pathParts.parentPath)/\(relativePath)"
+            let completionValue = parentPath.isEmpty ? name : "\(parentPath)/\(name)"
             return (isDirectory ? "\(completionValue)/" : completionValue, isDirectory)
         }
 
-        for dotEntry in dotEntryCompletions(for: pathParts) {
-            completions.append((dotEntry, true))
+        if parentPath.isEmpty {
+            for dotEntry in dotEntryCompletions(for: namePrefix) {
+                completions.append((dotEntry, true))
+            }
         }
 
         completions.sort { lhs, rhs in
@@ -719,39 +783,18 @@ struct FilePathCompleter {
         return completions.map(\.value)
     }
 
-    private func candidateFileURLs(
-        in directoryURL: URL,
-        options: FileManager.DirectoryEnumerationOptions,
-        recursively: Bool
+    private func listDirectory(
+        _ directoryURL: URL,
+        options: FileManager.DirectoryEnumerationOptions
     ) -> [URL] {
-        if recursively == false {
-            return (try? FileManager.default.contentsOfDirectory(
-                at: directoryURL,
-                includingPropertiesForKeys: [.isDirectoryKey],
-                options: options
-            )) ?? []
-        }
-
-        guard let enumerator = FileManager.default.enumerator(
+        (try? FileManager.default.contentsOfDirectory(
             at: directoryURL,
             includingPropertiesForKeys: [.isDirectoryKey],
             options: options
-        ) else {
-            return []
-        }
-
-        var results: [URL] = []
-        results.reserveCapacity(min(Self.maxCandidates, 256))
-        for case let url as URL in enumerator {
-            results.append(url)
-            if results.count >= Self.maxCandidates { break }
-        }
-        return results
+        )) ?? []
     }
 
     private func splitTypedPath(_ typedPath: String) -> (parentPath: String, namePrefix: String) {
-        guard typedPath.isEmpty == false else { return ("", "") }
-
         if typedPath.hasSuffix("/") {
             return (String(typedPath.dropLast()), "")
         }
@@ -765,10 +808,8 @@ struct FilePathCompleter {
         return (parentPath, namePrefix)
     }
 
-    private func dotEntryCompletions(for pathParts: (parentPath: String, namePrefix: String)) -> [String] {
-        guard pathParts.parentPath.isEmpty else { return [] }
-        guard pathParts.namePrefix.hasPrefix(".") else { return [] }
-
-        return ["./", "../"].filter { $0.hasPrefix(pathParts.namePrefix) }
+    private func dotEntryCompletions(for namePrefix: String) -> [String] {
+        guard namePrefix.hasPrefix(".") else { return [] }
+        return ["./", "../"].filter { $0.hasPrefix(namePrefix) }
     }
 }
