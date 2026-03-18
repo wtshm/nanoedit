@@ -309,11 +309,7 @@ final class MentionCompletingTextView: EscapeHandlingTextView {
     private lazy var popupView: MentionCompletionPopupView = {
         let view = MentionCompletionPopupView()
         view.onSelectCandidate = { [weak self] candidate in
-            if candidate.hasSuffix("/") {
-                self?.drillDownCompletion(with: candidate)
-            } else {
-                self?.commitMentionCompletion(with: candidate)
-            }
+            self?.acceptCandidate(candidate)
         }
         return view
     }()
@@ -384,11 +380,7 @@ final class MentionCompletingTextView: EscapeHandlingTextView {
             moveSelection(delta: 1)
         case #selector(insertTab(_:)):
             guard let candidate = completionSession?.selectedCandidate else { return }
-            if candidate.hasSuffix("/") {
-                drillDownCompletion(with: candidate)
-            } else {
-                commitMentionCompletion(with: candidate)
-            }
+            acceptCandidate(candidate)
         case #selector(insertNewline(_:)),
              #selector(insertNewlineIgnoringFieldEditor(_:)):
             guard let candidate = completionSession?.selectedCandidate else { return }
@@ -474,23 +466,21 @@ final class MentionCompletingTextView: EscapeHandlingTextView {
         popupView.update(candidates: session.candidates, selectedIndex: nextIndex)
     }
 
+    private func acceptCandidate(_ candidate: String) {
+        if candidate.hasSuffix("/") {
+            drillDownCompletion(with: candidate)
+        } else {
+            commitMentionCompletion(with: candidate)
+        }
+    }
+
     private func drillDownCompletion(with candidate: String) {
         guard let mentionMatch = findMentionAtCursor() else {
             dismissMentionCompletion()
             return
         }
 
-        guard shouldChangeText(in: mentionMatch.completionRange, replacementString: candidate) else { return }
-
-        isApplyingMentionCompletion = true
-        textStorage?.replaceCharacters(in: mentionMatch.completionRange, with: candidate)
-        didChangeText()
-        setSelectedRange(NSRange(
-            location: mentionMatch.completionRange.location + (candidate as NSString).length,
-            length: 0
-        ))
-        isApplyingMentionCompletion = false
-
+        replaceText(in: mentionMatch.completionRange, with: candidate)
         refreshMentionCompletion()
     }
 
@@ -500,24 +490,27 @@ final class MentionCompletingTextView: EscapeHandlingTextView {
             return
         }
 
-        let replacement = "\(candidate) "
-        guard shouldChangeText(in: mentionMatch.replacementRange, replacementString: replacement) else { return }
-
         let shouldNotifySessionEnd = dismissMentionCompletion(notify: false)
-        isApplyingMentionCompletion = true
-        textStorage?.replaceCharacters(in: mentionMatch.replacementRange, with: replacement)
-        didChangeText()
-        setSelectedRange(NSRange(
-            location: mentionMatch.replacementRange.location + (replacement as NSString).length,
-            length: 0
-        ))
-        isApplyingMentionCompletion = false
+        replaceText(in: mentionMatch.replacementRange, with: "\(candidate) ")
 
         if shouldNotifySessionEnd {
             onCompletionSessionEnded?()
         }
 
         window?.makeFirstResponder(self)
+    }
+
+    private func replaceText(in range: NSRange, with replacement: String) {
+        guard shouldChangeText(in: range, replacementString: replacement) else { return }
+
+        isApplyingMentionCompletion = true
+        textStorage?.replaceCharacters(in: range, with: replacement)
+        didChangeText()
+        setSelectedRange(NSRange(
+            location: range.location + (replacement as NSString).length,
+            length: 0
+        ))
+        isApplyingMentionCompletion = false
     }
 
     private func showOrUpdatePopup(for candidates: [String], selectedIndex: Int) {
@@ -729,10 +722,10 @@ struct FilePathCompleter {
             options: options
         )) ?? []
 
-        let scopePath = scopeURL.standardizedFileURL.path
+        let scopePath = scopeURL.path
         let prefixLength = scopePath.count + 1
         var completions = fileURLs.compactMap { fileURL -> (value: String, isDirectory: Bool)? in
-            let fullPath = fileURL.standardizedFileURL.path
+            let fullPath = fileURL.path
             guard fullPath.count > prefixLength else { return nil }
             let name = String(fullPath.dropFirst(prefixLength))
             guard name.hasPrefix(pathParts.namePrefix), name != pathParts.namePrefix else { return nil }
