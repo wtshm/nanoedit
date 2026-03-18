@@ -301,6 +301,7 @@ final class MentionCompletingTextView: EscapeHandlingTextView {
     private let mentionParser = MentionCompletionParser()
     private var isApplyingMentionCompletion = false
     private var completionSession: MentionCompletionSession?
+    private var completionGeneration = 0
     private var popupWindow: MentionCompletionPopupWindow?
     private weak var observedClipView: NSClipView?
     private weak var observedWindow: NSWindow?
@@ -308,7 +309,11 @@ final class MentionCompletingTextView: EscapeHandlingTextView {
     private lazy var popupView: MentionCompletionPopupView = {
         let view = MentionCompletionPopupView()
         view.onSelectCandidate = { [weak self] candidate in
-            self?.commitMentionCompletion(with: candidate)
+            if candidate.hasSuffix("/") {
+                self?.drillDownCompletion(with: candidate)
+            } else {
+                self?.commitMentionCompletion(with: candidate)
+            }
         }
         return view
     }()
@@ -377,8 +382,14 @@ final class MentionCompletingTextView: EscapeHandlingTextView {
             moveSelection(delta: -1)
         case #selector(moveDown(_:)):
             moveSelection(delta: 1)
-        case #selector(insertTab(_:)),
-             #selector(insertNewline(_:)),
+        case #selector(insertTab(_:)):
+            guard let candidate = completionSession?.selectedCandidate else { return }
+            if candidate.hasSuffix("/") {
+                drillDownCompletion(with: candidate)
+            } else {
+                commitMentionCompletion(with: candidate)
+            }
+        case #selector(insertNewline(_:)),
              #selector(insertNewlineIgnoringFieldEditor(_:)):
             guard let candidate = completionSession?.selectedCandidate else { return }
             commitMentionCompletion(with: candidate)
@@ -426,21 +437,32 @@ final class MentionCompletingTextView: EscapeHandlingTextView {
             return
         }
 
+        completionGeneration += 1
+        let generation = completionGeneration
         let selectedCandidate = completionSession?.selectedCandidate
         let completer = FilePathCompleter(rootURL: completionRootURL)
-        let candidates = completer.completions(for: mentionMatch.typedPath)
-        guard candidates.isEmpty == false else {
-            dismissMentionCompletion()
-            return
-        }
+        let typedPath = mentionMatch.typedPath
 
-        let selectedIndex = selectedCandidate.flatMap { candidates.firstIndex(of: $0) } ?? 0
-        completionSession = MentionCompletionSession(
-            match: mentionMatch,
-            candidates: candidates,
-            selectedIndex: selectedIndex
-        )
-        showOrUpdatePopup(for: candidates, selectedIndex: selectedIndex)
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            let candidates = completer.completions(for: typedPath)
+
+            DispatchQueue.main.async {
+                guard let self, self.completionGeneration == generation else { return }
+
+                guard candidates.isEmpty == false else {
+                    self.dismissMentionCompletion()
+                    return
+                }
+
+                let selectedIndex = selectedCandidate.flatMap { candidates.firstIndex(of: $0) } ?? 0
+                self.completionSession = MentionCompletionSession(
+                    match: mentionMatch,
+                    candidates: candidates,
+                    selectedIndex: selectedIndex
+                )
+                self.showOrUpdatePopup(for: candidates, selectedIndex: selectedIndex)
+            }
+        }
     }
 
     private func moveSelection(delta: Int) {
@@ -450,6 +472,26 @@ final class MentionCompletingTextView: EscapeHandlingTextView {
         session.selectedIndex = nextIndex
         completionSession = session
         popupView.update(candidates: session.candidates, selectedIndex: nextIndex)
+    }
+
+    private func drillDownCompletion(with candidate: String) {
+        guard let mentionMatch = findMentionAtCursor() else {
+            dismissMentionCompletion()
+            return
+        }
+
+        guard shouldChangeText(in: mentionMatch.completionRange, replacementString: candidate) else { return }
+
+        isApplyingMentionCompletion = true
+        textStorage?.replaceCharacters(in: mentionMatch.completionRange, with: candidate)
+        didChangeText()
+        setSelectedRange(NSRange(
+            location: mentionMatch.completionRange.location + (candidate as NSString).length,
+            length: 0
+        ))
+        isApplyingMentionCompletion = false
+
+        refreshMentionCompletion()
     }
 
     private func commitMentionCompletion(with candidate: String) {
@@ -663,112 +705,45 @@ final class MentionCompletingTextView: EscapeHandlingTextView {
     }
 }
 
-// Generates file path completion candidates from the filesystem.
+// Generates file path completion candidates by listing immediate directory contents.
 struct FilePathCompleter {
-    private static let maxCandidates = 1000
     let rootURL: URL
 
     func completions(for typedPath: String) -> [String] {
-        if typedPath.contains("/") {
-            return pathNavigationCompletions(for: typedPath)
-        }
-        return fileNameSearchCompletions(for: typedPath)
-    }
-
-    // Searches the entire tree for files/directories whose name starts with the query.
-    // Collects matches lazily up to maxCandidates.
-    private func fileNameSearchCompletions(for query: String) -> [String] {
-        var options: FileManager.DirectoryEnumerationOptions = [.skipsPackageDescendants]
-        if query.hasPrefix(".") == false {
-            options.insert(.skipsHiddenFiles)
-        }
-
-        let rootPath = rootURL.standardizedFileURL.path
-        let prefixLength = rootPath.count + 1
-
-        // Empty query: list immediate children only.
-        guard query.isEmpty == false else {
-            return buildCompletions(
-                from: listDirectory(rootURL, options: options),
-                rootPath: rootPath,
-                prefixLength: prefixLength,
-                parentPath: ""
-            )
-        }
-
-        guard let enumerator = FileManager.default.enumerator(
-            at: rootURL,
-            includingPropertiesForKeys: [.isDirectoryKey],
-            options: options
-        ) else { return [] }
-
-        var matches: [(value: String, isDirectory: Bool)] = []
-        for case let url as URL in enumerator {
-            guard url.lastPathComponent.hasPrefix(query) else { continue }
-
-            let fullPath = url.standardizedFileURL.path
-            guard fullPath.hasPrefix(rootPath),
-                  fullPath.count > prefixLength else { continue }
-            let relativePath = String(fullPath.dropFirst(prefixLength))
-
-            let isDirectory = (try? url.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) ?? false
-            matches.append((isDirectory ? "\(relativePath)/" : relativePath, isDirectory))
-            if matches.count >= Self.maxCandidates { break }
-        }
-
-        matches.sort { lhs, rhs in
-            if lhs.isDirectory != rhs.isDirectory {
-                return lhs.isDirectory && !rhs.isDirectory
-            }
-            return lhs.value.localizedStandardCompare(rhs.value) == .orderedAscending
-        }
-
-        return matches.map(\.value)
-    }
-
-    // Navigates into the directory specified by the path and lists its contents.
-    private func pathNavigationCompletions(for typedPath: String) -> [String] {
         let pathParts = splitTypedPath(typedPath)
-        let searchDirectoryURL = rootURL.appendingPathComponent(pathParts.parentPath, isDirectory: true)
+        let scopeURL: URL
+        if pathParts.parentPath.isEmpty {
+            scopeURL = rootURL
+        } else {
+            scopeURL = rootURL.appendingPathComponent(pathParts.parentPath, isDirectory: true)
+        }
 
         var options: FileManager.DirectoryEnumerationOptions = [.skipsPackageDescendants]
         if pathParts.namePrefix.hasPrefix(".") == false {
             options.insert(.skipsHiddenFiles)
         }
 
-        let rootPath = searchDirectoryURL.standardizedFileURL.path
-        let prefixLength = rootPath.count + 1
+        let fileURLs = (try? FileManager.default.contentsOfDirectory(
+            at: scopeURL,
+            includingPropertiesForKeys: [.isDirectoryKey],
+            options: options
+        )) ?? []
 
-        return buildCompletions(
-            from: listDirectory(searchDirectoryURL, options: options),
-            rootPath: rootPath,
-            prefixLength: prefixLength,
-            parentPath: pathParts.parentPath,
-            namePrefix: pathParts.namePrefix
-        )
-    }
-
-    private func buildCompletions(
-        from fileURLs: [URL],
-        rootPath: String,
-        prefixLength: Int,
-        parentPath: String,
-        namePrefix: String = ""
-    ) -> [String] {
+        let scopePath = scopeURL.standardizedFileURL.path
+        let prefixLength = scopePath.count + 1
         var completions = fileURLs.compactMap { fileURL -> (value: String, isDirectory: Bool)? in
             let fullPath = fileURL.standardizedFileURL.path
-            guard fullPath.hasPrefix(rootPath),
-                  fullPath.count > prefixLength else { return nil }
+            guard fullPath.count > prefixLength else { return nil }
             let name = String(fullPath.dropFirst(prefixLength))
-            guard name.hasPrefix(namePrefix), name != namePrefix else { return nil }
+            guard name.hasPrefix(pathParts.namePrefix), name != pathParts.namePrefix else { return nil }
 
             let isDirectory = (try? fileURL.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) ?? false
-            let completionValue = parentPath.isEmpty ? name : "\(parentPath)/\(name)"
+            let completionValue = pathParts.parentPath.isEmpty ? name : "\(pathParts.parentPath)/\(name)"
             return (isDirectory ? "\(completionValue)/" : completionValue, isDirectory)
         }
 
-        if parentPath.isEmpty {
-            for dotEntry in dotEntryCompletions(for: namePrefix) {
+        if pathParts.parentPath.isEmpty {
+            for dotEntry in dotEntryCompletions(for: pathParts.namePrefix) {
                 completions.append((dotEntry, true))
             }
         }
@@ -783,18 +758,9 @@ struct FilePathCompleter {
         return completions.map(\.value)
     }
 
-    private func listDirectory(
-        _ directoryURL: URL,
-        options: FileManager.DirectoryEnumerationOptions
-    ) -> [URL] {
-        (try? FileManager.default.contentsOfDirectory(
-            at: directoryURL,
-            includingPropertiesForKeys: [.isDirectoryKey],
-            options: options
-        )) ?? []
-    }
-
     private func splitTypedPath(_ typedPath: String) -> (parentPath: String, namePrefix: String) {
+        guard typedPath.isEmpty == false else { return ("", "") }
+
         if typedPath.hasSuffix("/") {
             return (String(typedPath.dropLast()), "")
         }
