@@ -270,6 +270,13 @@ class EditorViewController: NSViewController, NSWindowDelegate, NSTextViewDelega
         textView.drawsBackground = false
         textView.textColor = themeTextColor
         textView.insertionPointColor = themeTextColor
+        // Disable macOS text automation for code editing
+        textView.isAutomaticQuoteSubstitutionEnabled = false
+        textView.isAutomaticDashSubstitutionEnabled = false
+        textView.isAutomaticTextReplacementEnabled = false
+        textView.isAutomaticSpellingCorrectionEnabled = false
+        textView.isContinuousSpellCheckingEnabled = false
+        textView.isGrammarCheckingEnabled = false
     }
 
     override func viewDidLoad() {
