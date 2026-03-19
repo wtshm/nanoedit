@@ -13,6 +13,13 @@ A minimal floating text editor for macOS, designed for use as an external editor
 
 ## Install
 
+### Homebrew
+
+```bash
+brew tap wtshm/tap
+brew install nanoedit
+```
+
 ### Build from source
 
 ```bash
