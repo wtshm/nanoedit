@@ -2,6 +2,10 @@
 
 A minimal floating text editor for macOS, designed for use as an external editor (`$EDITOR` / `$VISUAL`).
 
+<div align="center">
+  <img src="./demo.webp" width="600" />
+</div>
+
 ## Features
 
 - Floating window (always on top)
