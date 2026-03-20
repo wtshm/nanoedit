@@ -223,6 +223,81 @@ class EditorViewController: NSViewController, NSWindowDelegate, NSTextViewDelega
         return textView
     }
 
+    private static let extensionToLanguage: [String: String] = [
+        "bash": "bash",
+        "c": "c",
+        "cc": "cpp",
+        "clj": "clojure",
+        "cmake": "cmake",
+        "cpp": "cpp",
+        "cs": "csharp",
+        "css": "css",
+        "cxx": "cpp",
+        "dart": "dart",
+        "diff": "diff",
+        "erl": "erlang",
+        "ex": "elixir",
+        "exs": "elixir",
+        "fish": "bash",
+        "go": "go",
+        "h": "c",
+        "hpp": "cpp",
+        "hs": "haskell",
+        "htm": "xml",
+        "html": "xml",
+        "java": "java",
+        "js": "javascript",
+        "json": "json",
+        "jsx": "javascript",
+        "kt": "kotlin",
+        "less": "less",
+        "lua": "lua",
+        "m": "objectivec",
+        "markdown": "markdown",
+        "md": "markdown",
+        "mm": "objectivec",
+        "patch": "diff",
+        "php": "php",
+        "pl": "perl",
+        "py": "python",
+        "r": "r",
+        "rb": "ruby",
+        "rs": "rust",
+        "scala": "scala",
+        "scss": "scss",
+        "sh": "bash",
+        "sql": "sql",
+        "swift": "swift",
+        "toml": "toml",
+        "ts": "typescript",
+        "tsx": "typescript",
+        "xml": "xml",
+        "yaml": "yaml",
+        "yml": "yaml",
+        "zsh": "bash",
+    ]
+
+    private static func detectLanguage(forPath path: String) -> String {
+        let url = URL(fileURLWithPath: path)
+        let ext = url.pathExtension.lowercased()
+        if let language = extensionToLanguage[ext] {
+            return language
+        }
+
+        // Handle extensionless filenames like Makefile, Dockerfile
+        let filename = url.lastPathComponent.lowercased()
+        switch filename {
+        case "makefile", "gnumakefile":
+            return "makefile"
+        case "dockerfile":
+            return "dockerfile"
+        case "rakefile", "gemfile", "podfile":
+            return "ruby"
+        default:
+            return "plaintext"
+        }
+    }
+
     private func setupHighlighting(
         textStorage: NSTextStorage,
         paragraphStyle: NSParagraphStyle,
@@ -237,9 +312,10 @@ class EditorViewController: NSViewController, NSWindowDelegate, NSTextViewDelega
             self.themeTextColor = color
         }
 
+        let language = Self.detectLanguage(forPath: filePath)
         let delegate = HighlightingTextStorageDelegate(
             highlighter: highlighter,
-            language: "markdown",
+            language: language,
             font: Self.editorFont,
             paragraphStyle: paragraphStyle,
             shouldDeferHighlighting: { [weak textView] in
